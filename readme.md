@@ -8,7 +8,7 @@ SSL is unverified because I found that a fair few feeds had it misconfigured and
 
 ```
 uv sync
-env DEEPL_AUTH_KEY='your key goes here' uv run -- gunicorn --workers 4 --timeout 120 --bind 0.0.0.0:5000 main:app
+env DEEPL_AUTH_KEY='your key goes here' uv run -- gunicorn --workers 4 --timeout 240 --bind 0.0.0.0:5000 main:app
 ```
 
 # Usage
