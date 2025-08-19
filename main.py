@@ -21,7 +21,7 @@ if not DEEPL_AUTH_KEY:
 try:
     translator = deepl.Translator(DEEPL_AUTH_KEY)
 except ValueError as e:
-    raise ValueError(f"DeepL Authentication Error: {e}") from e
+    raise ValueError(f"DeepL authentication error: {e}") from e
 
 cache = Cache('.translation_cache', size_limit=1024 * 1024 * 1024) # 1GB, measured in bytes
 
