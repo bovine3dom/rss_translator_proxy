@@ -1,4 +1,5 @@
 import os
+import re
 import deepl
 import feedparser
 import requests
@@ -32,8 +33,26 @@ def getTranslation(text_to_translate: str, target_lang: str = "EN-GB") -> str:
     if not isinstance(text_to_translate, str) or not text_to_translate.strip():
         return text_to_translate
 
+    # cut string down to least of two sentences/500 chars
+    original_length = len(text_to_translate)
+    truncated_to_500_chars = text_to_translate[:500]
+    sentences = re.split(r'(?<=[.?!])\s+', text_to_translate)
+    if len(sentences) > 2:
+        two_sentences = " ".join(sentences[:2])
+    else:
+        two_sentences = text_to_translate
+
+    if len(two_sentences) < len(truncated_to_500_chars):
+        maybe_truncated = two_sentences
+    else:
+        maybe_truncated = truncated_to_500_chars
+
+    if len(maybe_truncated) < original_length:
+        maybe_truncated += " [...]"
+
+    # send for translation
     try:
-        result = translator.translate_text(text_to_translate, target_lang=target_lang)
+        result = translator.translate_text(maybe_truncated, target_lang=target_lang)
         return result.text
     except deepl.DeepLException as e:
         app.logger.error(f"DeepL API error: {e}")
