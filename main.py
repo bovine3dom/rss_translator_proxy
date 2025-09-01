@@ -72,8 +72,9 @@ def get_feed():
         return "Please provide a 'url' query parameter.", 400
 
     try:
+        # some websites hate the default python requests agent. others hate curl...
         headers = {
-            "User-Agent": "curl/8.15.0" # some websites hate the default python requests agent
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0"
         }
         response = requests.get(feed_url, timeout=10, headers=headers, verify=False) # ssl disabled because these random feeds are bad at it
         response.raise_for_status()
