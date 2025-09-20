@@ -1,5 +1,6 @@
 import os
 import re
+import uuid
 import deepl
 import feedparser
 import requests
@@ -9,6 +10,7 @@ from flask import Flask, request, Response
 from feedgen.feed import FeedGenerator
 from bs4 import BeautifulSoup
 from diskcache import Cache
+from urllib.parse import urlparse
 
 # disable SSL warnings
 import urllib3
@@ -19,6 +21,12 @@ DEEPL_AUTH_KEY = os.environ.get("DEEPL_AUTH_KEY")
 if not DEEPL_AUTH_KEY:
     raise ValueError("DEEPL_AUTH_KEY environment variable not set.")
 
+AZURE_TRANSLATOR_KEY = os.environ.get("AZURE_TRANSLATOR_KEY")
+AZURE_TRANSLATOR_ENDPOINT = os.environ.get("AZURE_TRANSLATOR_ENDPOINT", "https://api.cognitive.microsofttranslator.com")
+AZURE_TRANSLATOR_REGION = os.environ.get("AZURE_TRANSLATOR_REGION")
+ALWAYS_AZURE_TITLE_SUBSTRINGS = [s.strip().lower() for s in os.environ.get("ALWAYS_AZURE_TITLE_SUBSTRINGS", "").split(",") if s.strip()]
+ALWAYS_AZURE_FEEDS = set(host.strip().lower() for host in os.environ.get("ALWAYS_AZURE_FEEDS", "").split(",") if host.strip())
+
 try:
     translator = deepl.Translator(DEEPL_AUTH_KEY)
 except ValueError as e:
@@ -27,6 +35,41 @@ except ValueError as e:
 cache = Cache('.translation_cache', size_limit=1024 * 1024 * 1024) # 1GB, measured in bytes
 
 app = Flask(__name__)
+
+def is_always_azure(feed_info) -> bool:
+    title_html = feed_info.get('title', '') or ''
+    title_text = BeautifulSoup(title_html, "html.parser").get_text(strip=True).lower()
+    if any(sub in title_text for sub in ALWAYS_AZURE_TITLE_SUBSTRINGS):
+        return True
+    link = (feed_info.get('link') or '').strip().lower()
+    try:
+        host = urlparse(link).netloc.lower()
+    except Exception:
+        host = ""
+    if not ALWAYS_AZURE_FEEDS:
+        return False
+    if (host and host in ALWAYS_AZURE_FEEDS) or (link and link in ALWAYS_AZURE_FEEDS):
+        return True
+    if any(tok in link or (host and tok in host) for tok in ALWAYS_AZURE_FEEDS):
+        return True
+    return False
+
+@cache.memoize()
+def azure_translate(text: str, lang: str) -> str:
+    url = AZURE_TRANSLATOR_ENDPOINT.rstrip('/') + '/translate'
+    params = {'api-version': '3.0', 'to': [lang]}
+    headers = {
+        'Ocp-Apim-Subscription-Key': AZURE_TRANSLATOR_KEY,
+        'Content-type': 'application/json',
+        'X-ClientTraceId': str(uuid.uuid4()),
+    }
+    if AZURE_TRANSLATOR_REGION:
+        headers['Ocp-Apim-Subscription-Region'] = AZURE_TRANSLATOR_REGION
+    r = requests.post(url, params=params, headers=headers, json=[{'text': text}], timeout=15)
+    if not r.ok:
+        raise Exception(f"Azure translation failed with status code {r.status_code}")
+    j = r.json()
+    return j[0]['translations'][0]['text']
 
 @cache.memoize()
 def getTranslation(text_to_translate: str, target_lang: str = "EN-GB") -> str:
@@ -56,10 +99,10 @@ def getTranslation(text_to_translate: str, target_lang: str = "EN-GB") -> str:
         return result.text
     except deepl.DeepLException as e:
         app.logger.error(f"DeepL API error: {e}")
-        return text_to_translate
+        return azure_translate(maybe_truncated, target_lang) or text_to_translate
     except Exception as e:
         app.logger.error(f"An unexpected error occurred during translation: {e}")
-        return text_to_translate
+        return azure_translate(maybe_truncated, target_lang) or text_to_translate
 
 
 @app.route('/feed')
@@ -86,15 +129,28 @@ def get_feed():
         fg = FeedGenerator()
         
         feed_info = original_feed.feed
+        force_azure = False
+        try:
+            force_azure = is_always_azure(feed_info)
+        except Exception:
+            pass
+        def _T(s: str, lang: str):
+            if force_azure:
+                try:
+                    return azure_translate(s, lang)
+                except Exception as e:
+                    app.logger.error(f"Azure translation failed: {e}")
+                    return s
+            return getTranslation(s, target_lang=lang)
         
         channel_title_html = feed_info.get('title', 'Untitled Feed')
         channel_title_text = BeautifulSoup(channel_title_html, "html.parser").get_text(strip=True)
-        translated_channel_title = getTranslation(channel_title_text, target_lang=target_lang)
+        translated_channel_title = _T(channel_title_text, target_lang)
         fg.title(translated_channel_title)
         
         channel_desc_html = feed_info.get('description') or feed_info.get('subtitle', '')
         channel_desc_text = BeautifulSoup(channel_desc_html, "html.parser").get_text(strip=True)
-        translated_channel_desc = getTranslation(channel_desc_text, target_lang=target_lang)
+        translated_channel_desc = _T(channel_desc_text, target_lang)
         
         if not translated_channel_desc.strip():
             translated_channel_desc = translated_channel_title
@@ -110,12 +166,12 @@ def get_feed():
             
             item_title_html = entry.get('title', 'No Title')
             item_title_text = BeautifulSoup(item_title_html, "html.parser").get_text(strip=True)
-            translated_item_title = getTranslation(item_title_text, target_lang=target_lang)
+            translated_item_title = _T(item_title_text, target_lang)
             fe.title(translated_item_title)
 
             description_html = entry.get('description') or entry.get('summary', '')
             description_text = BeautifulSoup(description_html, "html.parser").get_text(separator=' ', strip=True)
-            translated_description = getTranslation(description_text, target_lang=target_lang)
+            translated_description = _T(description_text, target_lang)
 
             if not translated_description.strip():
                 translated_description = translated_item_title
@@ -123,7 +179,7 @@ def get_feed():
 
             if 'author' in entry:
                 author_text = BeautifulSoup(entry.author, "html.parser").get_text(strip=True)
-                fe.author(name=getTranslation(author_text, target_lang=target_lang))
+                fe.author(name=_T(author_text, target_lang))
                 
             fe.link(href=entry.get('link', ''))
             fe.guid(entry.get('id', entry.get('link', '')), permalink=False)

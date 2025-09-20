@@ -13,6 +13,10 @@ uv sync
 env DEEPL_AUTH_KEY='your key goes here' uv run -- gunicorn --workers 4 --timeout 240 --bind 0.0.0.0:5000 main:app
 ```
 
+If you'd like to fall back to Azure, set the `AZURE_TRANSLATOR_KEY` and `AZURE_TRANSLATOR_REGION` environment variables.
+
+You may wish to add particularly prolific feeds to the `ALWAYS_AZURE_FEEDS` environment variable, e.g. `ALWAYS_AZURE_FEEDS=lok-report.de,another-noisy-feed.com` because it has a much bigger free tier.
+
 ## Using docker
 
 **Start the container with `docker run`**
