@@ -55,7 +55,26 @@ def is_always_azure(feed_info) -> bool:
     return False
 
 @cache.memoize()
-def azure_translate(text: str, lang: str) -> str:
+def azure_translate(text_to_translate: str, lang: str) -> str:
+
+    # this is stupid duplication of getTranslation, but i am lazy
+    original_length = len(text_to_translate)
+    truncated_to_500_chars = text_to_translate[:500]
+    sentences = re.split(r'(?<=[.?!])\s+', text_to_translate)
+    if len(sentences) > 2:
+        two_sentences = " ".join(sentences[:2])
+    else:
+        two_sentences = text_to_translate
+
+    if len(two_sentences) < len(truncated_to_500_chars):
+        maybe_truncated = two_sentences
+    else:
+        maybe_truncated = truncated_to_500_chars
+
+    if len(maybe_truncated) < original_length:
+        maybe_truncated += " [...]"
+    # stupid duplication ends
+
     url = AZURE_TRANSLATOR_ENDPOINT.rstrip('/') + '/translate'
     params = {'api-version': '3.0', 'to': [lang]}
     headers = {
@@ -65,7 +84,7 @@ def azure_translate(text: str, lang: str) -> str:
     }
     if AZURE_TRANSLATOR_REGION:
         headers['Ocp-Apim-Subscription-Region'] = AZURE_TRANSLATOR_REGION
-    r = requests.post(url, params=params, headers=headers, json=[{'text': text}], timeout=15)
+    r = requests.post(url, params=params, headers=headers, json=[{'text': maybe_truncated}], timeout=15)
     if not r.ok:
         raise Exception(f"Azure translation failed with status code {r.status_code}")
     j = r.json()
